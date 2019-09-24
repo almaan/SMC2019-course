@@ -1,1 +1,8 @@
 res/
+scripts/*.bak
+scripts/dump.py
+scripts/test.normal.py
+scripts/__pycache__/
+__pycache_/
+*pdf
+
