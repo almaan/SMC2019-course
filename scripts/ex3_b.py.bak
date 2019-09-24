@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+
+import sys
+import os.path as osp
+from os import mkdir
+
+sys.path.append(osp.abspath(__name__))
+
+import numpy as np
+import scipy.stats as st
+from scipy.special import loggamma
+import pandas as pd
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from utils import BSPF, ParticleMetropolisHastings,InverseGamma
+
+class ParticleMetropolisHastings:
+    def __init__(self,
+                 prior_dists,
+                 proposal_dists,
+                 initial_dists,
+                 eval_fun,
+                 test_params,
+                ):
+
+        self.proposal_dists = proposal_dists
+        self.initial_dists = initial_dists
+        self.eval_fun = eval_fun
+        self.prior_dists = prior_dists
+
+        self.allow_params = test_params
+
+        self.n_params = len(self.initial_dists)
+
+
+    def run(self,
+            data,
+            niter):
+
+        allowParams = False
+        params_list = np.zeros((niter,self.n_params))
+
+        while not allowParams:
+            iniparams = [ self.initial_dists[i].rvs() for i \
+                      in range(self.n_params)]
+
+            iniparams = np.array(iniparams)
+
+            allowParams = self.allow_params(iniparams)
+
+        params_list[0,:] = iniparams
+        print(f"initial parameters {iniparams}")
+
+        priors = sum([ self.initial_dists[i].logpdf(iniparams[i]) for i \
+                              in range(self.n_params)])
+
+        prior_list = np.zeros(niter)
+        prior_list[0] = priors
+
+        ll = self.eval_fun(data,iniparams)
+        ll_list = np.zeros(niter)
+        ll_list[0] = ll
+
+
+        for i in range(1,niter):
+            params_list[i,:] = [self.proposal_dists[p](params_list[i-1,p]).rvs() for \
+                         p in range(self.n_params) ]
+
+            if self.allow_params(params_list[i,:]):
+                ll_list[i]  = self.eval_fun(data,params_list[i,:])
+
+                print(f"Iteration {i} / {niter}")
+
+                prior_list[i] = sum([self.prior_dists[p].logpdf(params_list[i,p]) for \
+                             p in range(self.n_params)])
+
+                alpha = np.exp(ll_list[i] + prior_list[i] + \
+                               old_prop - ll_list[i-1] -\
+                               new_prop - prior_list[i-1])
+
+                alpha = np.min((1,alpha))
+
+            else:
+                alpha = 0
+
+            u = np.random.random()
+
+            if alpha < u:
+                ll_list[i] = ll_list[i-1]
+                params_list[i,:] = params_list[i-1,:]
+                prior_list[i] = prior_list[i-1]
+            else:
+                print(f'Accepting : {params_list[i,:]**0.5}')
+                print(f'current mean : {params_list[0:(i+1),:].mean(axis=0)}')
+
+        return {'params_list':params_list,
+                'll_list': ll_list,
+               }
+
+
+
+def visualize_parameter_dist(sigma_dist, beta_dist):
+
+    fig, ax = plt.subplots(1,2,figsize = (8,4))
+
+    ax[0].hist(sigma_dist,
+               edgecolor = 'black',
+               facecolor = 'gray',
+               alpha = 0.3,
+               density = True,
+              )
+
+    ax[0].axvline(x = np.mean(sigma_dist),
+                  color = 'darkred',
+                  alpha = 0.3,
+                  )
+
+    ax[0].set_title(r'$\sigma^2$')
+
+    ax[1].hist(beta_dist,
+               edgecolor = 'black',
+               facecolor = 'gray',
+               alpha = 0.3,
+               density = True,
+              )
+
+    ax[1].axvline(x =np.mean(beta_dist),
+                 color = 'darkred',
+                 alpha = 0.3,
+                 )
+
+    ax[1].set_title(r'$\beta^2$')
+
+    return fig,ax
+
+
+
+def eval_dist(data,
+              params,
+              phi = 0.985,
+              n_particles = 200):
+
+    sigma2 = params[0]
+    beta2 = params[1]
+
+    x0_dist = st.norm(0,np.sqrt(sigma2))
+
+    yt_xt_dist = lambda xt : st.norm(loc = 0,
+                                     scale = np.sqrt(beta2*np.exp(xt)))
+
+    xt_xtm1_dist = lambda xtm1 : st.norm(loc = phi*xtm1,
+                                         scale = np.sqrt(sigma2))
+
+    bpf = BSPF(xt_xtm1_dist,
+               yt_xt_dist,
+               x0_dist,
+               )
+
+    res = bpf.run(data,n_particles)
+
+    return res['loglikelihood']
+
+def allow_params(params,thrs = 10e-8):
+    if all(params > 0 + thrs ):
+        return True
+    else:
+        return False
+
+
+class PMH:
+    def __init__(self,data,n_particles):
+        self.data = data
+        S = np.eye(2)*0.2
+        self.pd = lambda mu : st.multivariate_normal(mu, S)
+        self.n_particles = 200
+
+
+    def run(self,niter):
+
+        prms = np.zeros((niter,2))
+        prm = np.random.random.uniform(0,1,size =2)
+        prms[0,:] = prm
+
+        pp = self.eval_dist(self.data,
+                            prm,
+                            n_particles)
+
+        for ii in range(1,niter):
+            _prm = self.pd(prm[k,:].reshape(-1,)).rvs()
+
+            if np.all(_prm > 0):
+                 _pp = self.eval_dist(self.data,
+                                     prm,
+                                     self.n_particles)
+
+                alpha = np.min((1,np.exp(_pp - pp)))
+
+                u = np.random.random()
+
+                if u <= alpha:
+                    prm = _prm
+                    pp = _pp
+
+                prms[ii,:] = prm
+
+        return prms
+
+
+
+
+
+
+
+
+
+def main():
+
+    ddir = osp.join(osp.dirname(osp.dirname(osp.abspath(__name__))),'data')
+    odir = osp.join(osp.dirname(osp.dirname(osp.abspath(__name__))),'res')
+
+    pth = osp.join(ddir,'seOMXlogreturns2012to2014.csv')
+
+    if not osp.exists(odir):
+            mkdir(odir)
+
+    with open(pth,'r+') as fopen:
+        yvals = fopen.readlines()
+
+    yvals = [float(x.replace('\n','').replace(',','')) for x in yvals]
+    yvals = np.array(yvals)
+
+    T = yvals.shape[0]
+
+
+    niter= 5000
+    burn_in = 2000
+    n_params = 2
+    step_size = 0.1
+
+
+    np.random.seed(1337)
+
+    initial_dists = [st.uniform(0,1) for x in range(n_params) ]
+    proposal_dists = [ lambda x: st.norm(x,step_size) for i in range(n_params) ]
+    prior_dists = [ InverseGamma(a = 0.01, b=0.01) for i in range(n_params) ]
+
+    pmh = ParticleMetropolisHastings(prior_dists,
+                                     proposal_dists,
+                                     initial_dists,
+                                     eval_dist,
+                                     allow_params,
+                                    )
+    res = pmh.run(yvals,niter)
+
+    sigma_dist = res['params_list'][burn_in::,0]
+    beta_dist = res['params_list'][burn_in::,1]
+
+    fig,ax = visualize_parameter_dist(sigma_dist,beta_dist)
+
+    fig.savefig(osp.join(odir,'ex3-hist-params-mh.png'))
+
+if __name__ == '__main__':
+    main()
