@@ -85,7 +85,7 @@ class PMH:
                  n_particles):
 
         self.ys = data
-        self.S = np.eye(2)*(0.1**2)
+        self.S = np.eye(2)*(0.01**2)
         self.prior = InverseGamma(0.01,0.01)
         self.n_particles = n_particles
 
@@ -107,7 +107,9 @@ class PMH:
         priors[0] = self.prior.logpdf(prms[0,:]).sum()
 
         for ii in range(1,niter):
-            prms[ii,:] = prms[ii-1,:] + np.random.multivariate_normal(np.zeros(2), cov = self.S)
+            prms[ii,:] = prms[ii-1,:]
+            prms[ii,:] += np.random.multivariate_normal(np.zeros(2),
+                                                        cov = self.S)
 
             if np.all(prms[ii,:] > 0):
                 pps[ii] = eval_dist(self.ys,
@@ -157,9 +159,9 @@ def main():
     T = yvals.shape[0]
 
 
-    niter= int(sys.argv[2])
+    niter= 2500
     burn_in = int(0.4*niter)
-    n_particles = int(sys.argv[1])
+    n_particles = 1000
 
 
     np.random.seed(1337)
